@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IntelliVision - Real-Time Object Detection</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        /* Music Player at Top */
+        .music-player {
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 15px;
+            padding: 15px 25px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border: 2px solid #00d4ff;
+        }
+        .music-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .music-icon {
+            font-size: 1.5em;
+        }
+        .music-title {
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        .music-btn {
+            padding: 8px 20px;
+            background: rgba(0, 212, 255, 0.2);
+            border: 2px solid #00d4ff;
+            color: white;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        .music-btn:hover {
+            background: rgba(0, 212, 255, 0.4);
+            transform: scale(1.05);
+        }
+        
+        header {
+            text-align: center;
+            padding: 30px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            margin-bottom: 30px;
+            border: 2px solid #00d4ff;
+        }
+        h1 {
+            font-size: 2.5em;
+            color: #00d4ff;
+            text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            font-size: 1.1em;
+            color: #aaa;
+        }
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+        }
+        .video-section {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 15px;
+            padding: 20px;
+            border: 2px solid #00d4ff;
+        }
+        .video-container {
+            position: relative;
+            width: 100%;
+            border-radius: 10px;
+            overflow: hidden;
+            background: black;
+        }
+        #videoFeed {
+            width: 100%;
+            display: block;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 10px 20px;
+            background: rgba(0, 255, 0, 0.2);
+            border: 2px solid #00ff00;
+            border-radius: 25px;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        .controls-section {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 15px;
+            padding: 20px;
+            border: 2px solid #00d4ff;
+        }
+        .control-group {
+            margin-bottom: 25px;
+        }
+        .control-group h3 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .radio-option {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+        .radio-option:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: #00d4ff;
+        }
+        .radio-option input {
+            margin-right: 10px;
+            cursor: pointer;
+        }
+        select {
+            width: 100%;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 2px solid #00d4ff;
+            border-radius: 10px;
+            font-size: 1em;
+            cursor: pointer;
+        }
+        select option {
+            background: #1a1a2e;
+            color: white;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 15px;
+        }
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0, 212, 255, 0.5);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        .btn-stop {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+        }
+        .btn-stop:hover {
+            box-shadow: 0 8px 25px rgba(255, 68, 68, 0.5);
+        }
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Music Player at Top -->
+        <div class="music-player">
+            <div class="music-controls">
+                <span class="music-icon">🎵</span>
+                <div>
+                    <div class="music-title">Cyberpunk Background Music</div>
+                    <small style="color: #aaa;">Enhanced Detection Experience</small>
+                </div>
+            </div>
+            <div>
+                <button class="music-btn" onclick="toggleMusic()" id="musicBtn">
+                    <span id="musicBtnText">▶️ Play Music</span>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Audio element (starts muted, click to play) -->
+        <audio id="bgMusic" loop preload="auto">
+            <source src="/static/cyberpunk.mp3" type="audio/mpeg">
+            <source src="{{ url_for('static', filename='cyberpunk.mp3') }}" type="audio/mpeg">
+        </audio>
+
+        <header>
+            <h1>🕶️ IntelliVision</h1>
+            <p class="subtitle">Real-Time Multi-Object Detection & Analytics</p>
+        </header>
+
+        <div class="main-content">
+            <div class="video-section">
+                <h3 style="color: #00d4ff; margin-bottom: 15px;">📹 Live Detection Feed</h3>
+                <div class="video-container">
+                    <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Live Video Feed">
+                </div>
+                <div class="status-badge">
+                    🟢 Live Streaming
+                </div>
+            </div>
+
+            <div class="controls-section">
+                <div class="control-group">
+                    <h3>🎯 Detection Mode</h3>
+                    <div class="radio-group">
+                        <label class="radio-option">
+                            <input type="radio" name="mode" value="auto" checked onchange="updateMode()">
+                            <span>🔍 Auto-Detect All Objects</span>
+                        </label>
+                        <label class="radio-option">
+                            <input type="radio" name="mode" value="search" onchange="updateMode()">
+                            <span>🎯 Search Specific Object</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="control-group" id="objectSelect" style="display: none;">
+                    <h3>📋 Select Object</h3>
+                    <select id="targetObject">
+                        {% for cls in classes %}
+                        <option value="{{ cls }}">{{ cls }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <button onclick="applySettings()">✅ Apply Settings</button>
+                <button onclick="saveLogs()" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">
+                    💾 Save Logs
+                </button>
+                <button onclick="stopDetection()" class="btn-stop">
+                    ⏹ Stop Detection
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let musicPlaying = false;
+        const bgMusic = document.getElementById('bgMusic');
+        const musicBtnText = document.getElementById('musicBtnText');
+        
+        // Set initial volume
+        bgMusic.volume = 0.3; // 30% volume
+        
+        function toggleMusic() {
+            if (musicPlaying) {
+                bgMusic.pause();
+                musicBtnText.innerHTML = '▶️ Play Music';
+                musicPlaying = false;
+            } else {
+                // Play with user interaction (browser policy compliant)
+                bgMusic.play().then(() => {
+                    musicBtnText.innerHTML = '⏸ Pause Music';
+                    musicPlaying = true;
+                }).catch(error => {
+                    console.error('Playback failed:', error);
+                    alert('⚠️ Music playback blocked by browser. Click "Play Music" button to start.');
+                });
+            }
+        }
+        
+        function updateMode() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const objectSelect = document.getElementById('objectSelect');
+            
+            if (mode === 'search') {
+                objectSelect.style.display = 'block';
+            } else {
+                objectSelect.style.display = 'none';
+            }
+        }
+
+        function applySettings() {
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const target = document.getElementById('targetObject').value;
+            
+            fetch('/set_mode', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    mode: mode,
+                    target: mode === 'search' ? target : null
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert('✅ Settings applied!\nMode: ' + data.mode + (data.target ? '\nTarget: ' + data.target : ''));
+            })
+            .catch(error => {
+                alert('❌ Error applying settings');
+                console.error('Error:', error);
+            });
+        }
+
+        function saveLogs() {
+            fetch('/save_logs')
+            .then(response => response.json())
+            .then(data => {
+                alert(data.message);
+            })
+            .catch(error => {
+                alert('❌ Error saving logs');
+                console.error('Error:', error);
+            });
+        }
+        
+        function stopDetection() {
+            if (confirm('⚠️ Are you sure you want to stop detection?\n\nThis will reload the page.')) {
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>

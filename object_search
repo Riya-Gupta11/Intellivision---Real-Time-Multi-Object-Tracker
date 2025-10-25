@@ -1,0 +1,205 @@
+import cv2
+import os
+import time
+from datetime import datetime
+import pandas as pd
+from ultralytics import YOLO
+
+# ---------------- CONFIG ----------------
+DEFAULT_MOBILE_URL = ""  # e.g. "http://192.168.29.221:8080/video"
+MODEL_PATH = "models/yolov8n.pt"
+CONFIDENCE_THRESHOLD = 0.45
+SNAPSHOT_DIR = "snapshots"
+CSV_LOG = "detections_log.csv"
+CAMERA_SCAN_RANGE = range(0, 6)
+RECONNECT_DELAY = 2
+SNAPSHOT_INTERVAL = 7
+
+RESIZE_WIDTH = 288         # Detection input size
+RESIZE_HEIGHT = 162
+WINDOW_NAME = "IntelliVision - Object Search"
+CANVAS_W, CANVAS_H = 900, 600  # Window size to fill (16:9 recommended for perfect stretch)
+# ----------------------------------------
+
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+
+def try_open_capture(url_or_index, use_ffmpeg=False):
+    if isinstance(url_or_index, str):
+        if use_ffmpeg:
+            return cv2.VideoCapture(url_or_index, cv2.CAP_FFMPEG)
+        return cv2.VideoCapture(url_or_index)
+    else:
+        return cv2.VideoCapture(int(url_or_index))
+
+def find_working_source(mobile_url=""):
+    if mobile_url:
+        print(f"[i] Trying mobile stream URL: {mobile_url}")
+        cap = try_open_capture(mobile_url)
+        time.sleep(1.0)
+        if cap.isOpened():
+            print("[+] Connected to mobile stream (URL).")
+            return cap, f"Mobile URL: {mobile_url}"
+        else:
+            print("[!] Mobile URL failed. Trying local webcams...")
+    for idx in CAMERA_SCAN_RANGE:
+        print(f"[i] Trying local camera index {idx} ...")
+        cap = try_open_capture(idx)
+        time.sleep(0.5)
+        if cap.isOpened():
+            print(f"[+] Opened local camera index {idx}.")
+            return cap, f"Local camera index {idx}"
+        else:
+            try:
+                cap.release()
+            except:
+                pass
+    return None, None
+
+def choose_initial_source():
+    print("\n--- Camera source setup ---")
+    print("If you have a mobile webcam URL (Iriun / IP Webcam), paste it now.")
+    print("Or just press Enter to auto-scan local webcams (recommended).")
+    url = input("Mobile camera URL (or Enter to skip): ").strip()
+    if url == "":
+        url = DEFAULT_MOBILE_URL.strip()
+    return url
+
+def get_user_prompt(known_names):
+    print("\nAvailable classes sample (first 30):")
+    sample = list(known_names.values())[:30]
+    print(", ".join(sample))
+    p = input("\nEnter the object to search (exact or substring, e.g. 'remote' or 'cell phone'): ").strip().lower()
+    return p
+
+def main():
+    print("[i] Loading YOLOv8 model (this may take a bit)...")
+    try:
+        model = YOLO(MODEL_PATH)
+    except Exception as e:
+        print("[!] Failed to load YOLOv8 model:", e)
+        return
+
+    known = model.names
+    print(f"[+] YOLOv8 model loaded. {len(known)} classes available.")
+    print(f"[i] Detection threshold: {CONFIDENCE_THRESHOLD}")
+
+    mobile_url = choose_initial_source()
+    cap, source_desc = find_working_source(mobile_url)
+    if cap is None:
+        print("[!] No camera source available. Check your webcam or mobile stream and try again.")
+        return
+
+    print(f"[+] Using source: {source_desc}")
+    print("Controls: Press 'q' in video window to change target, press 'Esc' to exit.\n")
+
+    target = get_user_prompt(known)
+    if target == "":
+        print("[i] Empty input - will run in auto-detect mode (shows all objects).")
+        target = None
+
+    log_rows = []
+    last_snapshot = 0
+
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WINDOW_NAME, CANVAS_W, CANVAS_H)
+
+    try:
+        while True:
+            if not cap.isOpened():
+                print("[!] Capture closed. Reconnecting...")
+                cap.release()
+                time.sleep(RECONNECT_DELAY)
+                cap, source_desc = find_working_source(mobile_url)
+                if cap is None:
+                    print("[!] Reconnect failed. Exiting.")
+                    break
+                print(f"[+] Reconnected to {source_desc}")
+
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.2)
+                continue
+
+            # Resize feed for detection
+            frame = cv2.resize(frame, (RESIZE_WIDTH, RESIZE_HEIGHT))
+            annotated = frame.copy()
+            found_any = False
+
+            if target is None:
+                results = model.predict(frame, conf=CONFIDENCE_THRESHOLD, verbose=False)
+                if results and hasattr(results[0], "boxes") and results[0].boxes:
+                    for box in results[0].boxes:
+                        cls_id = int(box.cls[0].item())
+                        conf = float(box.conf[0].item())
+                        if conf < CONFIDENCE_THRESHOLD:
+                            continue
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        label = model.names[cls_id]
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0,255,255), 2)
+                        cv2.putText(annotated, f"{label} ({conf:.2f})", (x1, y1-10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 2)
+            else:
+                candidates = [k for k,v in known.items() if target in v.lower()]
+                if not candidates:
+                    cv2.putText(annotated, f"'{target}' not in YOLO classes", (10,30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+                else:
+                    results = model.predict(frame, conf=CONFIDENCE_THRESHOLD, classes=candidates, verbose=False)
+                    if results and hasattr(results[0], "boxes") and results[0].boxes:
+                        for box in results[0].boxes:
+                            cls_id = int(box.cls[0].item())
+                            conf = float(box.conf[0].item())
+                            if conf < CONFIDENCE_THRESHOLD:
+                                continue
+                            label = known[cls_id]
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            cv2.rectangle(annotated, (x1,y1),(x2,y2), (0,255,0), 3)
+                            cv2.putText(annotated, f"{label} ({conf:.2f})", (x1, y1-10),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+                            found_any = True
+                            now = time.time()
+                            if now - last_snapshot > SNAPSHOT_INTERVAL:
+                                snap_name = os.path.join(SNAPSHOT_DIR, f"{target}_{int(now)}.jpg")
+                                cv2.imwrite(snap_name, annotated)
+                                print(f"[+] Snapshot saved: {snap_name}")
+                                last_snapshot = now
+                            log_rows.append({
+                                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "object": label,
+                                "confidence": round(conf, 2)
+                            })
+                    status = f"{target}: {'FOUND' if found_any else 'SEARCHING...'}"
+                    color = (0,255,0) if found_any else (0,0,255)
+                    cv2.putText(annotated, status, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+            # === AB koi canvas/offset nahi! FULL WINDOW STRETCH ===
+            show_img = cv2.resize(annotated, (CANVAS_W, CANVAS_H))
+            cv2.imshow(WINDOW_NAME, show_img)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:
+                print("[i] Esc pressed - exiting.")
+                break
+            if key == ord('q'):
+                print("\n-- Change target prompt --")
+                new_t = input("Enter new object (or empty to switch to auto-detect): ").strip().lower()
+                if new_t == "":
+                    target = None
+                    print("[i] Switched to Auto-Detect mode.")
+                else:
+                    target = new_t
+                    print(f"[i] Searching for: {target}")
+
+    except KeyboardInterrupt:
+        print("\n[i] Interrupted by user.")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        if len(log_rows) > 0:
+            df = pd.DataFrame(log_rows)
+            df.to_csv(CSV_LOG, index=False)
+            print(f"[+] Detection log saved to {CSV_LOG}")
+        print("[+] Finished. Resources released.")
+
+if __name__ == "__main__":
+    main()
