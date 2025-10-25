@@ -1,168 +1,155 @@
 from flask import Flask, render_template, Response, request, jsonify
-import torch
 import cv2
-import numpy as np
 from ultralytics import YOLO
-from threading import Lock
+import numpy as np
+import os
 import time
-import csv
-import io
 from datetime import datetime
-import re
-
-# --- Configuration ---
-MODEL_PATH = 'yolov8n.pt'
-CONFIDENCE_THRESHOLD = 0.50
-USE_GPU = torch.cuda.is_available()
-IMG_SIZE = 320
-HALF_PRECISION = USE_GPU
-FRAME_SKIP = 2
-RETRY_ATTEMPTS = 5
-RETRY_DELAY = 1
+import pandas as pd
+from collections import defaultdict
 
 app = Flask(__name__)
 
-# --- Global Variables ---
-camera_lock = Lock()
-current_camera_source = "0"
-current_target_class = None
-current_confidence = CONFIDENCE_THRESHOLD
-detection_mode = "auto"
-detections_log = []
-connection_error = None
+# Config
+MODEL_PATH = "yolov8n.pt"
+CONFIDENCE = 0.45
+SNAPSHOT_DIR = "snapshots"
+CSV_LOG = "detections_log.csv"
+os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
-# --- Load YOLOv8 Model ---
-try:
-    model = YOLO(MODEL_PATH)
-    if USE_GPU:
-        model.to('cuda')
-        print("Using CUDA for acceleration")
-    KNOWN_CLASSES = model.names
-    print(f"YOLOv8 Model ({MODEL_PATH}) loaded successfully.")
-    print(f"Available classes: {len(KNOWN_CLASSES)}")
-except Exception as e:
-    print(f"Error loading YOLOv8 model: {e}")
-    exit()
+# Load model
+print("[+] Loading YOLOv8 model...")
+model = YOLO(MODEL_PATH)
+print("[+] Model loaded successfully.")
 
-def validate_url(url):
-    pattern = r'^(http|https):\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}(\/.*)?$'
-    return bool(re.match(pattern, url))
+known_classes = list(model.names.values())
 
-def get_camera_stream(source):
-    global connection_error
-    cap = None
-    source = str(source).strip()
-    if source in ("0", "local"):
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            connection_error = "Failed to open local webcam. Ensure it is connected and not in use."
-            raise ConnectionError(connection_error)
-    else:
-        if not validate_url(source):
-            connection_error = "Invalid URL. Use http://YOUR_IP:PORT/video."
-            raise ConnectionError(connection_error)
-        if '?' not in source:
-            source += '?t=' + str(int(time.time()))
-        for attempt in range(RETRY_ATTEMPTS):
-            cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.set(cv2.CAP_PROP_FPS, 30)
-            for _ in range(10):
-                if cap and cap.isOpened():
-                    connection_error = None
-                    break
-                time.sleep(0.15)
-            if cap and cap.isOpened():
-                break
-            else:
-                connection_error = f"Attempt {attempt+1}/{RETRY_ATTEMPTS}: Could not connect to {source}."
-                print(connection_error)
-                cap.release() if cap else None
-                cap = None
-                time.sleep(RETRY_DELAY * (2 ** attempt))
-        if not cap or not cap.isOpened():
-            connection_error = f"Failed to connect to {source} after {RETRY_ATTEMPTS} tries."
-            raise ConnectionError(connection_error)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    return cap
+# Global variables
+camera = None
+detection_mode = "auto"  # "auto" or "search"
+target_object = None
+log_data = []
+
+def get_camera():
+    global camera
+    if camera is None or not camera.isOpened():
+        camera = cv2.VideoCapture(0)
+        time.sleep(1.0)
+    return camera
 
 def generate_frames():
-    global current_camera_source, detection_mode, current_target_class, current_confidence, detections_log, connection_error
-    cap = None
-    fps_counter = 0
-    fps_start_time = time.time()
-    fps = 0
-    frame_skip = 0
-
+    global detection_mode, target_object, log_data
+    
+    cap = get_camera()
+    last_snapshot = 0
+    
     while True:
-        with camera_lock:
-            if cap is None or not cap.isOpened():
-                try:
-                    cap = get_camera_stream(current_camera_source)
-                except Exception as e:
-                    print(f"Camera reconnect error: {e}")
-                    connection_error = str(e)
-                    time.sleep(1)
-                    continue
-
         success, frame = cap.read()
         if not success:
-            print("Failed to read frame, reconnecting...")
-            connection_error = "Failed to read stream. Reconnecting..."
-            if cap:
-                cap.release()
-            cap = None
+            time.sleep(0.1)
             continue
-
-        fps_counter += 1
-        if (time.time() - fps_start_time) > 1:
-            fps = fps_counter
-            fps_counter = 0
-            fps_start_time = time.time()
-
-        annotated_frame = frame.copy()
-        if frame_skip % FRAME_SKIP == 0:
-            try:
-                predict_kwargs = {
-                    'source': frame,
-                    'conf': current_confidence,
-                    'imgsz': IMG_SIZE,
-                    'half': HALF_PRECISION and USE_GPU,
-                    'verbose': False,
-                    'device': 'cuda' if USE_GPU else 'cpu'
-                }
-                if detection_mode == "search" and current_target_class:
-                    class_id = next((k for k, v in KNOWN_CLASSES.items()
-                                   if v.lower() == current_target_class.lower()), None)
-                    if class_id is not None:
-                        predict_kwargs['classes'] = [class_id]
-                results = model.predict(**predict_kwargs)
-                annotated_frame = results[0].plot()
-                for r in results:
-                    for box in r.boxes:
-                        cls_id = int(box.cls)
-                        conf = float(box.conf)
-                        xyxy = box.xyxy.cpu().numpy()[0]
-                        det = {
-                            'timestamp': datetime.now().strftime("%H:%M:%S"),
-                            'class': KNOWN_CLASSES[cls_id],
-                            'confidence': round(conf, 3),
-                            'bbox': xyxy.tolist()
-                        }
-                        detections_log.append(det)
-                        if len(detections_log) > 400:
-                            detections_log.pop(0)
-            except Exception as e:
-                print(f"Detection error: {e}")
-                connection_error = f"Detection error: {e}"
-        frame_skip += 1
-
-        ret, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        
+        # Resize frame
+        base_height = int(frame.shape[0] * 640 / frame.shape[1])
+        frame = cv2.resize(frame, (640, base_height))
+        annotated = frame.copy()
+        found_any = False
+        
+        # Auto-detect mode
+        if detection_mode == "auto":
+            results = model.predict(frame, conf=CONFIDENCE, verbose=False)
+            counts = defaultdict(int)
+            
+            if results and hasattr(results[0], "boxes") and results[0].boxes:
+                for box in results[0].boxes:
+                    cls_id = int(box.cls[0].item())
+                    conf = float(box.conf[0].item())
+                    if conf < CONFIDENCE:
+                        continue
+                    
+                    label = model.names[cls_id]
+                    counts[label] += 1
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    
+                    # Draw detection
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                    cv2.putText(annotated, f"{label} ({conf:.2f})", (x1, y1-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                
+                # Display counts
+                y0 = 30
+                for cls, cnt in counts.items():
+                    cv2.putText(annotated, f"{cls}: {cnt}", (10, y0),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    y0 += 30
+        
+        # Search specific mode
+        elif detection_mode == "search" and target_object:
+            candidates = [k for k, v in model.names.items() if target_object.lower() in v.lower()]
+            
+            if not candidates:
+                cv2.putText(annotated, f"'{target_object}' not in YOLO classes", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            else:
+                results = model.predict(frame, conf=CONFIDENCE, classes=candidates, verbose=False)
+                
+                if results and hasattr(results[0], "boxes") and results[0].boxes:
+                    for box in results[0].boxes:
+                        cls_id = int(box.cls[0].item())
+                        conf = float(box.conf[0].item())
+                        if conf < CONFIDENCE:
+                            continue
+                        
+                        label = model.names[cls_id]
+                        found_any = True
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        
+                        # Draw detection
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                        cv2.putText(annotated, f"{label} ({conf:.2f})", (x1, y1-10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        
+                        # Log
+                        log_data.append({
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "object": label,
+                            "confidence": round(conf, 2)
+                        })
+                        
+                        # Snapshot every 7 seconds
+                        now = time.time()
+                        if now - last_snapshot > 7:
+                            snap_name = os.path.join(SNAPSHOT_DIR, f"{target_object}_{int(now)}.jpg")
+                            cv2.imwrite(snap_name, annotated)
+                            print(f"[+] Snapshot saved: {snap_name}")
+                            last_snapshot = now
+                
+                # Status overlay
+                status = f"{target_object}: {'FOUND ✅' if found_any else 'SEARCHING 🔍'}"
+                color = (0, 255, 0) if found_any else (0, 0, 255)
+                cv2.putText(annotated, status, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+        
+        # Canvas display (aspect ratio preserved, centered)
+        CANVAS_W, CANVAS_H = 900, 600
+        canvas = np.zeros((CANVAS_H, CANVAS_W, 3), dtype=np.uint8)
+        h, w = annotated.shape[:2]
+        scale = min(CANVAS_W/w, CANVAS_H/h)
+        new_w, new_h = int(w*scale), int(h*scale)
+        resized = cv2.resize(annotated, (new_w, new_h))
+        x_off = (CANVAS_W - new_w) // 2
+        y_off = (CANVAS_H - new_h) // 2
+        canvas[y_off:y_off+new_h, x_off:x_off+new_w] = resized
+        
+        # Encode frame
+        ret, buffer = cv2.imencode('.jpg', canvas)
         frame_bytes = buffer.tobytes()
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-    if cap:
-        cap.release()
+        
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.route('/')
+def index():
+    return render_template('index.html', classes=known_classes)
 
 @app.route('/video_feed')
 def video_feed():
@@ -171,32 +158,27 @@ def video_feed():
 
 @app.route('/set_mode', methods=['POST'])
 def set_mode():
-    global detection_mode, current_target_class
+    global detection_mode, target_object
     data = request.json
     detection_mode = data.get('mode', 'auto')
-    current_target_class = data.get('target', None)
-    print(f"[i] Mode: {detection_mode}, Target: {current_target_class}")
-    return jsonify({"status": "success", "mode": detection_mode, "target": current_target_class})
+    target_object = data.get('target', None)
+    print(f"[i] Mode: {detection_mode}, Target: {target_object}")
+    return jsonify({"status": "success", "mode": detection_mode, "target": target_object})
 
-@app.route('/api/classes')
-def get_classes():
-    return jsonify({"classes": list(KNOWN_CLASSES.values())})
+@app.route('/get_logs')
+def get_logs():
+    if log_data:
+        df = pd.DataFrame(log_data).tail(10)
+        return df.to_html(index=False, classes='table table-striped')
+    return "<p>No detection logs yet</p>"
 
-@app.route('/api/detections')
-def get_detections():
-    return jsonify(detections_log[-50:])
-
-@app.route('/')
-def index():
-    return render_template('index.html', classes=list(KNOWN_CLASSES.values()))
+@app.route('/save_logs')
+def save_logs():
+    if log_data:
+        df = pd.DataFrame(log_data)
+        df.to_csv(CSV_LOG, index=False)
+        return jsonify({"status": "success", "message": f"Logs saved to {CSV_LOG}"})
+    return jsonify({"status": "error", "message": "No logs to save"})
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 Starting YOLOv8 Detection Server")
-    print("=" * 60)
-    print(f"📊 Model: {MODEL_PATH}")
-    print(f"🔢 Available Classes: {len(KNOWN_CLASSES)}")
-    print(f"🖥️  CUDA Available: {USE_GPU}")
-    print(f"🌐 Server: http://localhost:5000")
-    print("=" * 60)
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
