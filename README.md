@@ -127,7 +127,7 @@ http://localhost:5000
 </p>
 
 <p align="center">
-  <img src="assets/images/Team Algorithm Aces - Handout.jpg" width="400" />
+  <img src="Team Algorithm Aces - Handout.jpg" width="400" />
 </p>
 
 
