@@ -120,9 +120,6 @@ http://localhost:5000
   <img src="assets/images/cell phone_1761377594.jpg" width="300" />
   <img src="assets/images/chair_1761384875.jpg" width="300" />
   <img src="assets/images/keyboard_1761385357.jpg" width="300" />
-</p>
-
-<p align="center">
   <img src="assets/images/snap_1761375179.jpg" width="300" />
 </p>
 
