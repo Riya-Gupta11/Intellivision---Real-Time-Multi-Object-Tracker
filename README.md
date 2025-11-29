@@ -3,7 +3,7 @@ AI-Powered Real-Time Object Detection & Tracking using **YOLOv8**, **Flask** and
 
 ---
 
-## 🚀 Overview  
+## ⚡ Overview  
 **IntelliVision** is a real-time multi-object detection and tracking system built using **YOLOv8** and deployed through a **Flask web interface**.  
 The system supports **local webcams**, **IP cameras**, multiple detection modes and logs real-time tracking insights — all within a clean and intuitive web UI.
 
