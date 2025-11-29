@@ -14,7 +14,7 @@ I handled the **core technical development**:
 - Real-time multi-object tracking pipeline  
 - Error-handling & camera connectivity logic  
 
-My teammates contributed to **UI ideas, documentation, and the presentation**.
+My teammates contributed to **UI ideas, documentation and the presentation**.
 
 ---
 
