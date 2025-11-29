@@ -109,15 +109,10 @@ http://localhost:5000
 
 ---
 
-## 📸 Screenshots & Exhibition Photos  
-> Add screenshots after uploading in GitHub.
+## 📸 Screenshots of Working  
+> 
 
-Example:
-```md
-![App Screenshot](images/screenshot1.png)
-```
 
----
 
 ## 👥 Team & Contribution  
 > **Team Leader:** Riya Gupta (Me)
