@@ -126,6 +126,10 @@ http://localhost:5000
   <img src="assets/images/snap_1761375179.jpg" width="300" />
 </p>
 
+<p align="center">
+  <img src="assets/images/Team Algorithm Aces - Handout.jpg" width="400" />
+</p>
+
 
 
 ## 👥 Team & Contribution  
